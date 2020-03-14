@@ -4,3 +4,4 @@ git add README.md
 git commit -m "first commit"
 git remote add origin https://github.com/Erlingdr/Solar.git
 git push -u origin master
+This set of files is for my solar trackers.  I am using Firgelli actuators, Arduino Mega2560r3, Multimoto, and 8 channel relays.
