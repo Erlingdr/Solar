@@ -11,7 +11,13 @@
 #include <SPI.h>  //multimoto control
 #include <Wire.h> //I2C, accelerometers, screen
 #include <DFRobot_LIS2DH12.h> //accelerometers
+#include <LiquidCrystal_I2C.h> //screen
 
+const bool EXTEND = 0;
+const bool RETRACT = 1;
+
+LiquidCrystal_I2C lcd(0x20,16,2);// set the LCD address to 0x27 for a 16 chars and 2 line display
+DFRobot_LIS2DH12 RED_ACC; //Red Accelerometer
 
 //----------------Set Pins to define schematic-------------------
 // L9958 slave select pins for SPI
@@ -66,7 +72,7 @@ class Actuator {
     short Relay_N;
     short PWM_Pin;
     short Feed_Pin;
-    bool RelayCMD;
+    unsigned int RelayCMD;
     int MinLimit;
     int LimitMax;
     int act_posit;
@@ -75,7 +81,7 @@ class Actuator {
       MinLimit = -10;
       LimitMax = 10;
     }
-    void populateActuator(short ss, short dir, short rp, short rn,short pp, short feed, bool cmd) {
+    void populateActuator(short ss, short dir, short rp, short rn,short pp, short feed, unsigned int cmd) {
       SlaveSelect_Pin = ss;
       Direction_Pin = dir;
       Relay_P = rp;
@@ -83,7 +89,7 @@ class Actuator {
       PWM_Pin = pp;
       RelayCMD = cmd;
     } 
-    void extend(int moveDirection, int counts) {
+    void move(bool moveDirection, int counts) {
       //loop so that you never exceed the limits    
         if ((act_posit > LimitMax) or (act_posit < MinLimit)) {
           counts = 0;
@@ -97,19 +103,26 @@ class Actuator {
         } else {
         //drive the actuator in the direction for counts       
          int pwmR = 255; //set direction and speed 
-                  Serial.println("ready to run");
+                  lcd.clear();
+                  lcd.print("ready to run: ");
+                  lcd.print(counts);
+                  lcd.print(", ");
+                  lcd.print(Relay_P);
+                  lcd.print(", ");
+                  lcd.println(RelayCMD);
          digitalWrite(Relay_P, RelayCMD);
          digitalWrite(Relay_N, RelayCMD);
          digitalWrite(Direction_Pin, moveDirection);
          analogWrite(PWM_Pin, pwmR); // write to pins
+  
          while (counts > 0) {
           //change counts until counts is 0
           delay(50);
           counts = counts - 50;
          }
-         analogWrite(PWM_Pin, 0); //stop motor
-         digitalWrite(Relay_P, LOW);
-         digitalWrite(Relay_N, LOW);
+   //      digitalWrite(Relay_P, LOW);
+         digitalWrite(Relay_N, LOW); //return pins to minimum power use
+         analogWrite(PWM_Pin, 0); //turn off motor command
     } }
     void setMinLimit(int limit) {
       MinLimit = limit;
@@ -130,8 +143,8 @@ class Pole {
     double EWangle;
     // Constructor
     Pole(short SSt_Pin, short Dir_Pin, short R_P, short R_N, short PWM_Pin, short feed_NPin, short feed_EPin) {
-      North_South.populateActuator(SSt_Pin, Dir_Pin, R_P, R_N,PWM_Pin, feed_NPin, HIGH);
-      East_West.populateActuator(SSt_Pin, Dir_Pin, R_P, R_N,PWM_Pin, feed_EPin, LOW);
+      North_South.populateActuator(SSt_Pin, Dir_Pin, R_P, R_N,PWM_Pin, feed_NPin, 1);
+      East_West.populateActuator(SSt_Pin, Dir_Pin, R_P, R_N,PWM_Pin, feed_EPin, 0);
       pinMode(SSt_Pin, OUTPUT); digitalWrite(SSt_Pin, LOW);  // HIGH = not selected
       pinMode(Dir_Pin, OUTPUT);
       pinMode(PWM_Pin, OUTPUT);  digitalWrite(PWM_Pin, LOW);
@@ -156,6 +169,14 @@ class Pole {
     }
 
 };
+// Initialize the various components in the system
+  //Set operating limits by input or 'by example'
+  //set the time (zulu?)
+  Pole Red(SS_RED, DIR_RED, RED_P, RED_N, PWM_RED, REDN_Feed, REDE_Feed);
+  Pole Blue(SS_BLUE, DIR_BLUE, BLUE_P, BLUE_N, PWM_BLUE, BLUEN_Feed, BLUEE_Feed);
+  Pole Green(SS_GREEN, DIR_GREEN, GREEN_P, GREEN_N, PWM_GREEN, GREENN_Feed, GREENE_Feed);
+  Pole Orange(SS_ORANGE, DIR_ORANGE, ORANGE_P, ORANGE_N, PWM_ORANGE, ORANGEN_Feed, ORANGEE_Feed);
+    unsigned int configWord;
  
     //sunrise and sunset times (equation?)
     //sun position
@@ -166,21 +187,21 @@ class Pole {
     
 //-----------------Initialize system-------------------------- 
 void setup() {
+    lcd.init();
     Wire.begin();
     Serial.begin(115200);
     while(!Serial);
     delay(100);
              Serial.println("Pole class defined");
+    lcd.backlight();          
+    lcd.print("System setup");
+ //set up Accelerometers
+  while(RED_ACC.init(LIS2DH12_RANGE_2GA) == -1){  //Equipment connection exception or I2C address error
+    Serial.println("No I2C devices found");
+    delay(1000);
+  }
 
-// Initialize the various components in the system
-  //Set operating limits by input or 'by example'
-  //set the time (zulu?)
-  Pole Red(SS_RED, DIR_RED, RED_P, RED_N, PWM_RED, REDN_Feed, REDE_Feed);
-  Pole Blue(SS_BLUE, DIR_BLUE, BLUE_P, BLUE_N, PWM_BLUE, BLUEN_Feed, BLUEE_Feed);
-  Pole Green(SS_GREEN, DIR_GREEN, GREEN_P, GREEN_N, PWM_GREEN, GREENN_Feed, GREENE_Feed);
-  Pole Orange(SS_ORANGE, DIR_ORANGE, ORANGE_P, ORANGE_N, PWM_ORANGE, ORANGEN_Feed, ORANGEE_Feed);
-    unsigned int configWord;
-
+    
   // Multimoto - L9958 Enable for all 4 motors
   pinMode(ENABLE_MOTORS, OUTPUT); 
  digitalWrite(ENABLE_MOTORS, HIGH);  // HIGH = disabled
@@ -217,16 +238,29 @@ void setup() {
   Orange.setupMotoshield(configWord);
   digitalWrite(ENABLE_MOTORS, LOW);// LOW = enabled
 
-  //test software
-    Serial.println("Start of test");
+//test software - initialize actuators manually
+  Serial.println("Start of test");
   Red.North_South.setActPosit(2);
-  Red.North_South.extend(1, 1000);
-  delay(2000);
+  Red.East_West.setActPosit(2);
 
 }
 
 //-----------------------Tracker Program-----------------------
 void loop() {
+   //test software
+   acceleration();
+  Red.North_South.move(RETRACT, 1000);
+ // lcd.backlight();
+  delay(1000);
+  Blue.East_West.move(EXTEND,900);
+  lcd.clear();
+  lcd.println("Blue East West moving");
+  delay(1000);
+  Red.East_West.move(EXTEND, 800);
+  lcd.clear();
+  lcd.println("Red East West moving");
+  delay(800);
+
 // Loop the main software to operate and protect the system
   // Check for some manual override state
     //Override can go to safe position
@@ -266,4 +300,19 @@ void loop() {
    //Achieve target position(actuator, goal, Limit())
    //Calibrate position(pole actuator, gravity, position)
    //set operating limits(pole, actuator, position, max_or_min, Limit)
+}
+   void acceleration(void)
+{
+  int16_t x, y, z;
+
+  delay(100);
+  RED_ACC.readXYZ(x, y, z);
+  RED_ACC.mgScale(x, y, z);
+//  Serial.print("Acceleration x: "); //print acceleration
+  Serial.print(x);
+  Serial.print(";");
+  Serial.print(y);
+  Serial.print(";");
+  Serial.println(z);
+//  Serial.println(" mg");
 }
